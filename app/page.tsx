@@ -43,12 +43,15 @@ interface GameState {
   blueVotes: Record<string, any>;
   logs: string[];
   score: { attack: number; defense: number };
+  votingEndsAt?: number;
 }
 
 export default function App() {
   const [role, setRole] = useState<string | null>(null);
   const [roomId, setRoomId] = useState("");
   const [connected, setConnected] = useState(false);
+  const [userId] = useState(() => Math.random().toString(36).substring(2, 10));
+  const [timeLeft, setTimeLeft] = useState(0);
 
   const [choice, setChoice] = useState<any>(null);
 
@@ -56,7 +59,8 @@ export default function App() {
     redVotes: {},
     blueVotes: {},
     logs: [],
-    score: { attack: 0, defense: 0 }
+    score: { attack: 0, defense: 0 },
+    votingEndsAt: 0
   });
 
   if (!isFirebaseConfigured) {
@@ -98,6 +102,20 @@ export default function App() {
     };
   }, [roomId]);
 
+  useEffect(() => {
+    if (!gameState.votingEndsAt) {
+      setTimeLeft(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const remaining = Math.max(0, Math.floor((gameState.votingEndsAt! - Date.now()) / 1000));
+      setTimeLeft(remaining);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameState.votingEndsAt]);
+
   const createRoom = () => {
     if (!db) {
       alert("Firebase не инициализирован. Проверь .env.local");
@@ -113,7 +131,8 @@ export default function App() {
         redVotes: {},
         blueVotes: {},
         logs: [],
-        score: { attack: 0, defense: 0 }
+        score: { attack: 0, defense: 0 },
+        votingEndsAt: 0
       }).catch((error) => {
         console.error("Ошибка создания комнаты:", error);
         alert("Не удалось создать комнату: " + error.message);
@@ -134,19 +153,27 @@ export default function App() {
   };
 
   const submitVote = () => {
-    if (!choice) return;
+    if (!choice || timeLeft <= 0) return;
     if (!db) {
       alert("Firebase не инициализирован");
       return;
     }
 
     const path = role === "red" ? "redVotes" : "blueVotes";
+    const hasVoted = role === 'red' ? !!(gameState.redVotes || {})[userId] : !!(gameState.blueVotes || {})[userId];
+    if (hasVoted) return;
 
-    push(ref(db, `rooms/${roomId}/${path}`), choice).catch((error) => {
+    set(ref(db, `rooms/${roomId}/${path}/${userId}`), choice).catch((error) => {
       console.error("Ошибка отправки голоса:", error);
       alert("Не удалось отправить голос: " + error.message);
     });
-    setChoice(null);
+  };
+
+  const startVoting = () => {
+    if (!db) return;
+    set(ref(db, `rooms/${roomId}/votingEndsAt`), Date.now() + 30000);
+    set(ref(db, `rooms/${roomId}/redVotes`), {});
+    set(ref(db, `rooms/${roomId}/blueVotes`), {});
   };
 
   const getWinner = (votes: Record<string, any>) => {
@@ -207,7 +234,8 @@ export default function App() {
       score: {
         attack: gameState.score.attack + (success ? 1 : 0),
         defense: gameState.score.defense + (!success ? 1 : 0)
-      }
+      },
+      votingEndsAt: 0
     }).catch((error) => {
       console.error("Ошибка при подведении итога:", error);
       alert("Не удалось подвести итог: " + error.message);
@@ -299,6 +327,12 @@ export default function App() {
         <div className="text-center mb-4 p-2 bg-white rounded-lg border-2 border-indigo-300">
           <p className="text-sm text-gray-600">Код комнаты:</p>
           <p className="text-2xl font-bold text-indigo-600">{roomId}</p>
+          {(gameState.votingEndsAt || 0) > 0 && (
+            <div className="mt-2">
+              <p className="text-sm text-gray-600">Осталось времени на голосование:</p>
+              <p className={`text-2xl font-bold ${timeLeft <= 5 ? 'text-red-600' : 'text-indigo-600'}`}>00:{timeLeft.toString().padStart(2, '0')}</p>
+            </div>
+          )}
         </div>
 
         {(role === "red" || role === "blue") && (
@@ -324,13 +358,18 @@ export default function App() {
                 ))}
               </div>
 
-              <Button 
-                onClick={submitVote}
-                className="w-full bg-indigo-600 hover:bg-indigo-700"
-                disabled={!choice}
-              >
-                ✅ Отправить голос
-              </Button>
+              {(() => {
+                const hasVoted = role === 'red' ? !!(gameState.redVotes || {})[userId] : !!(gameState.blueVotes || {})[userId];
+                return (
+                  <Button 
+                    onClick={submitVote}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700"
+                    disabled={!choice || hasVoted || timeLeft <= 0}
+                  >
+                    {hasVoted ? "✅ Голос принят" : timeLeft <= 0 ? "⏳ Голосование закрыто" : "✅ Отправить голос"}
+                  </Button>
+                );
+              })()}
             </CardContent>
           </Card>
         )}
@@ -338,6 +377,13 @@ export default function App() {
         {role === "admin" && (
           <Card className="mb-6 bg-white border-2 border-purple-300">
             <CardContent className="p-6">
+              <Button 
+                onClick={startVoting}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-lg py-3 mb-3"
+              >
+                ⏱️ Начать голосование (30с)
+              </Button>
+
               <Button 
                 onClick={resolveRound}
                 className="w-full bg-purple-600 hover:bg-purple-700 text-lg py-3"

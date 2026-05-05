@@ -158,6 +158,7 @@ export default function App() {
   // Автоматическое подведение итогов по истечении таймера
   useEffect(() => {
     if (role === "admin" && timeLeft === 0 && (gameState.votingEndsAt || 0) > 0) {
+      if (Date.now() < (gameState.votingEndsAt || 0)) return; // таймер әлі аяқталмаған
       if (isResolving.current) return;
       isResolving.current = true;
       resolveRound();
